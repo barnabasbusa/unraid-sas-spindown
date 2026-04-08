@@ -216,7 +216,7 @@ DEBUG=&debug;
 [ -f &debugfile; ] &amp;&amp; DEBUG=true
 
 # Regex for sense data indicating "spun down" SAS drive
-SAS_SPUNDOWN_SENSE_RE='(standby condition activated|notify \(enable spinup\) required)'
+SAS_SPUNDOWN_SENSE_RE='(standby condition activated|notify \(enable spinup\) required|additional power use not yet granted)'
 
 . &plugindir;/drive_types 2&gt; /dev/null
 
