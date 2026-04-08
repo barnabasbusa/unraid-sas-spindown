@@ -281,6 +281,24 @@ GetCtrlID () {
         sed 's/0x//g'
   )
 }
+
+# Get peer LUNs on the same SCSI target (for dual-actuator drives).
+# Returns block device names (e.g. "sdf sdg") sharing the same H:C:T.
+# Excludes the device passed as $1.
+GetPeerLUNs () {
+  local DEV=${1#'/dev/'}
+  local HCTL=$(ls /sys/block/$DEV/device/scsi_device/ 2&gt;/dev/null)
+  [ -z "$HCTL" ] &amp;&amp; return
+  local HCT="${HCTL%:*}"
+  local PEERS=""
+  for BLK in /sys/block/sd* ; do
+    local BDEV=$(basename $BLK)
+    [ "$BDEV" = "$DEV" ] &amp;&amp; continue
+    local BHCTL=$(ls $BLK/device/scsi_device/ 2&gt;/dev/null)
+    [ "${BHCTL%:*}" = "$HCT" ] &amp;&amp; PEERS="$PEERS $BDEV"
+  done
+  echo $PEERS
+}
 </INLINE>
 </FILE>
 
@@ -352,10 +370,28 @@ case ${2,,} in
       if ! IsExcluded $RDEVNAME ; then
         if IsRotational $RDEVNAME ; then
 
+          # For dual-actuator drives, collect all LUNs on the same SCSI
+          # target so we can spin them down together.  A dual-actuator
+          # drive shares its platters across actuators (LUNs); spinning
+          # down only one LUN leaves the platters turning for the other,
+          # and any I/O to either LUN in the gap wakes the whole drive.
+          SPINDOWN_DEVS="$RDEVNAME"
+          for PEER in $(GetPeerLUNs $RDEVNAME) ; do
+            if IsSAS $PEER &amp;&amp; IsRotational $PEER &amp;&amp; ! IsExcluded $PEER ; then
+              SPINDOWN_DEVS="$SPINDOWN_DEVS /dev/$PEER"
+            fi
+          done
+
           Log "Spinning down device $RDEVNAME"
-          $DEBUG &amp;&amp; Log "debug: $SG_START -rp3 $RDEVNAME"
-          $SG_START -rp3 $RDEVNAME &gt; /dev/null ||
-             RC=1
+          if [ "$SPINDOWN_DEVS" != "$RDEVNAME" ] ; then
+            Log "Dual-actuator drive detected, also spinning down peer LUN(s):${SPINDOWN_DEVS#$RDEVNAME}"
+          fi
+
+          for SDEV in $SPINDOWN_DEVS ; do
+            $DEBUG &amp;&amp; Log "debug: $SG_START -rp3 $SDEV"
+            $SG_START -rp3 $SDEV &gt; /dev/null &amp;
+          done
+          wait || RC=1
 
         fi
 
